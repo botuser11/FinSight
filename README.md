@@ -1,54 +1,71 @@
 # FinSight — Personal Finance Dashboard
 
-An AI-powered personal finance dashboard with Open Banking integration, automatic transaction categorisation, anomaly detection, spending forecasts, and savings insights.
+> AI-powered personal finance dashboard with Open Banking integration, 
+> automatic transaction categorisation, anomaly detection, and spending forecasts.
+
+**Live Demo:** https://fin-sight-flax.vercel.app  
+**Demo credentials:** demo@finsight.app / demo123
+
+## Screenshots
+
+### Dashboard (Light & Dark mode)
+![Dashboard Dark](screenshots/dashboard-dark.png)
+![Dashboard Light](screenshots/dashboard-light.png)
+
+### Transactions
+![Transactions](screenshots/transactions.png)
+
+### Spending Forecast
+![Forecast](screenshots/forecast.png)
+
+### Anomaly Detection
+![Anomalies](screenshots/anomalies.png)
+
+### Savings Insights
+![Savings](screenshots/savings.png)
+
+### Login
+![Login](screenshots/login.png)
 
 ## Features
-
 - **Open Banking** via TrueLayer OAuth2 — connect real UK bank accounts
-- **Transaction categorisation** — rule-based matching + LLM fallback via OpenRouter
-- **Anomaly detection** — statistical flagging using the 2σ (two standard deviations) method per category
-- **Spending forecast** — exponential smoothing with trend adjustment over historical months
-- **Subscription detection** — identifies recurring payments by merchant and charge pattern
-- **Price increase alerts** — flags merchants whose recurring charge has risen >5%
-- **Spending trends** — compares last 30 days vs prior 30 days per category
-- **Dark / light mode** — persisted to localStorage, respects system preference
-- **JWT authentication** — secure login and registration
+- **Smart categorisation** — rule-based engine with LLM fallback (OpenRouter/Mistral)
+- **Anomaly detection** — statistical flagging using 2σ method
+- **Spending forecast** — exponential smoothing with trend adjustment
+- **Subscription detection** — automatically identifies recurring payments
+- **Price increase alerts** — detects when subscription costs rise
+- **Dark/light mode** — full theme support
+- **JWT authentication** — secure email/password auth
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Backend | FastAPI, SQLAlchemy, SQLite (dev) / PostgreSQL (prod) |
-| Frontend | React 18, Vite, Tailwind CSS, Recharts |
-| Auth | JWT via python-jose |
+| Backend | FastAPI, SQLAlchemy, PostgreSQL |
+| Frontend | React, Vite, Tailwind CSS, Recharts |
+| Auth | JWT (python-jose) |
 | Open Banking | TrueLayer API |
-| LLM categorisation | OpenRouter (Mistral 7B) |
-| Deployment | Railway (backend), Vercel (frontend) |
+| LLM | OpenRouter (Mistral 7B) |
+| Deployment | Render (backend), Vercel (frontend) |
 
 ## Local Development
 
 ### Prerequisites
-
 - Python 3.11+
 - Node.js 18+
-- TrueLayer sandbox account — [console.truelayer.com](https://console.truelayer.com)
-- OpenRouter account — [openrouter.ai](https://openrouter.ai)
+- TrueLayer sandbox account (free)
+- OpenRouter account (free)
 
-### Backend setup
-
+### Backend
 ```bash
 cd backend
 cp .env.example .env
-# Fill in your credentials in .env
+# Fill in your credentials
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-API will be available at `http://localhost:8000`.
-Interactive docs at `http://localhost:8000/docs`.
-
-### Frontend setup
-
+### Frontend
 ```bash
 cd frontend
 cp .env.example .env
@@ -56,15 +73,18 @@ npm install
 npm run dev
 ```
 
-App will be available at `http://localhost:5173`.
+### Seed demo data
+```bash
+cd backend
+python seed_demo_data.py
+```
 
-### Environment variables
+## Environment Variables
 
-**Backend (`backend/.env`):**
-
+### Backend (.env)
 ```
 DATABASE_URL=sqlite:///./finsight.db
-SECRET_KEY=your-secret-key-here
+SECRET_KEY=your-secret-key
 ALGORITHM=HS256
 TRUELAYER_CLIENT_ID=your-truelayer-client-id
 TRUELAYER_CLIENT_SECRET=your-truelayer-client-secret
@@ -75,71 +95,19 @@ OPENROUTER_API_KEY=your-openrouter-key
 FRONTEND_URL=http://localhost:5173
 ```
 
-**Frontend (`frontend/.env`):**
-
+### Frontend (.env)
 ```
 VITE_API_URL=http://localhost:8000
 ```
 
-## Deployment
-
-### Backend — Railway
-
-1. Connect your GitHub repo to [Railway](https://railway.app)
-2. Set the root directory to `/backend`
-3. Add all environment variables from `backend/.env`
-4. Update TrueLayer URLs to production endpoints:
-   - `TRUELAYER_AUTH_URL=https://auth.truelayer.com`
-   - `TRUELAYER_API_URL=https://api.truelayer.com`
-5. Set `FRONTEND_URL` to your Vercel deployment URL
-6. Set `TRUELAYER_REDIRECT_URI` to `https://your-railway-app.railway.app/banking/callback`
-7. Railway detects the `Procfile` and deploys automatically
-
-### Frontend — Vercel
-
-1. Connect your GitHub repo to [Vercel](https://vercel.com)
-2. Set the root directory to `/frontend`
-3. Add environment variable: `VITE_API_URL=https://your-railway-app.railway.app`
-4. Vercel detects Vite and deploys automatically
-5. `vercel.json` handles SPA routing rewrites
-
 ## Architecture
 
-The app is built across 7 modules:
-
-| Module | Description |
-|--------|-------------|
-| 1 — Auth | User registration and login with JWT |
-| 2 — Banking | TrueLayer OAuth2 flow, account sync, transaction import |
-| 3 — Categorisation | Rule-based + LLM categorisation of transactions |
-| 4 — Dashboard | Monthly overview with metric cards, spending chart, category donut |
-| 5 — Anomaly Detection | Flags transactions >2σ above category mean |
-| 6 — Forecast | Exponential smoothing forecast with trend detection |
-| 7 — Savings Insights | Subscription detection, spending trends, price increase alerts |
-
-```
-FinSight/
-├── backend/
-│   ├── main.py              # FastAPI app, middleware, router registration
-│   ├── models.py            # SQLAlchemy models
-│   ├── database.py          # DB connection and session
-│   ├── auth.py              # JWT auth helpers
-│   ├── categoriser.py       # Rule-based + LLM categorisation
-│   ├── anomaly_detector.py  # Statistical anomaly detection
-│   ├── forecaster.py        # Exponential smoothing forecast
-│   ├── insights.py          # Subscription / trend / price-increase detection
-│   └── routers/
-│       ├── auth.py
-│       ├── banking.py
-│       ├── transactions.py
-│       ├── anomalies.py
-│       ├── forecast.py
-│       └── insights.py
-└── frontend/
-    └── src/
-        ├── api/             # Axios API modules per domain
-        ├── components/      # Layout + reusable UI components
-        ├── context/         # Auth and theme context
-        ├── hooks/           # Data-fetching hooks
-        └── pages/           # One file per route
-```
+Built across 8 modules:
+- **Module 1** — FastAPI backend + React frontend + JWT auth
+- **Module 2** — TrueLayer Open Banking OAuth + transaction sync  
+- **Module 3** — Rule-based categorisation + LLM fallback
+- **Module 4** — React dashboard with Recharts visualisations
+- **Module 5** — Statistical anomaly detection (2σ)
+- **Module 6** — Exponential smoothing forecast
+- **Module 7** — Subscription detection + savings insights
+- **Module 8** — Deployed on Render + Vercel
