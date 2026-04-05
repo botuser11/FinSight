@@ -15,7 +15,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -312,36 +311,47 @@ export default function Dashboard() {
               No category data
             </div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="45%"
-                  innerRadius={55}
-                  outerRadius={80}
-                  dataKey="value"
-                  paddingAngle={2}
-                >
-                  {pieData.map((entry, i) => (
-                    <Cell key={i} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomPieTooltip />} />
-                <Legend
-                  iconType="circle"
-                  iconSize={8}
-                  formatter={(v, entry) => {
-                    const pct = pieTotal > 0 ? ((entry.payload.value / pieTotal) * 100).toFixed(0) : 0
-                    return (
+            <>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={88}
+                    dataKey="value"
+                    paddingAngle={2}
+                  >
+                    {pieData.map((entry, i) => (
+                      <Cell key={i} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomPieTooltip />} />
+                </PieChart>
+              </ResponsiveContainer>
+
+              {/* Custom legend below chart */}
+              <div className="flex flex-wrap gap-x-4 gap-y-2 mt-3">
+                {pieData.map((entry) => {
+                  const pct = pieTotal > 0 ? ((entry.value / pieTotal) * 100).toFixed(0) : 0
+                  return (
+                    <div key={entry.name} className="flex items-center gap-1.5">
+                      <span
+                        className="h-2 w-2 rounded-full shrink-0"
+                        style={{ backgroundColor: entry.fill }}
+                      />
                       <span className="text-xs text-slate-600 dark:text-slate-400">
-                        {v} <span className="text-slate-400 dark:text-slate-500">{pct}%</span>
+                        {entry.name}
                       </span>
-                    )
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+                      <span className="text-xs text-slate-400 dark:text-slate-500">
+                        {pct}%
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
           )}
         </div>
       </div>
