@@ -4,7 +4,7 @@
 > automatic transaction categorisation, anomaly detection, and spending forecasts.
 
 **Live Demo:** https://fin-sight-flax.vercel.app  
-**Demo credentials:** demo@finsight.app / demo123
+**Demo credentials:** demo@finsight.app / demo1234
 
 ## Screenshots
 
