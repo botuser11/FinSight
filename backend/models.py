@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, Boolean, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Float, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -60,3 +60,29 @@ class Transaction(Base):
 
     account = relationship('Account', back_populates='transactions')
     category = relationship('Category', back_populates='transactions')
+
+
+class AppMeta(Base):
+    """Small key/value store for app state (e.g. the demo seed version)."""
+    __tablename__ = 'app_meta'
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
+
+
+class MerchantCategoryCache(Base):
+    """LLM answers keyed by normalised merchant name, so each merchant is only asked about once."""
+    __tablename__ = 'merchant_category_cache'
+
+    merchant = Column(String, primary_key=True)
+    category = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class LlmUsage(Base):
+    """LLM calls per user per day, for the daily cap."""
+    __tablename__ = 'llm_usage'
+
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    day = Column(Date, primary_key=True)
+    calls = Column(Integer, nullable=False, default=0)

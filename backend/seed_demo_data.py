@@ -19,9 +19,10 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, insert
 
+from anomaly_detector import detect_anomalies
 from config import DEMO_EMAIL, DEMO_PASSWORD
 from database import SessionLocal, ensure_schema
-from models import Account, Category, Transaction, User
+from models import Account, AppMeta, Category, Transaction, User
 from auth import hash_password
 
 logger = logging.getLogger("finsight.seed")
@@ -29,6 +30,10 @@ logger = logging.getLogger("finsight.seed")
 # ── configuration ────────────────────────────────────────────────────────────
 
 MONTHS_OF_HISTORY = 12
+# Bump whenever generate_transactions() changes what the demo shows;
+# the demo user is re-seeded when the stored version differs.
+SEED_VERSION = 2
+SEED_VERSION_KEY = "demo_seed_version"
 # Regenerate demo data once its latest transaction is older than this
 STALE_AFTER = timedelta(days=3)
 
@@ -61,14 +66,6 @@ EXPENSE_TEMPLATES = [
     ("Nando's",             "Dining",        (14, 28),   2),
     ("Starbucks",           "Dining",        (4, 8),     6),
     ("Just Eat",            "Dining",        (18, 40),   3),
-    # Subscriptions (fixed-ish amounts)
-    ("Netflix",             "Subscriptions", (15, 18),   1),
-    ("Spotify",             "Subscriptions", (10, 11),   1),
-    ("Amazon Prime",        "Subscriptions", (8, 9),     1),
-    ("Disney+",             "Subscriptions", (4, 5),     1),
-    ("Apple",               "Subscriptions", (0, 1),     1),  # iCloud
-    ("GitHub",              "Subscriptions", (3, 4),     1),
-    ("Gym Membership",      "Subscriptions", (30, 35),   1),
     # Utilities
     ("British Gas",         "Utilities",     (45, 110),  1),
     ("Thames Water",        "Utilities",     (28, 42),   1),
@@ -78,6 +75,37 @@ EXPENSE_TEMPLATES = [
     ("Amazon",              "Other",         (8, 120),   4),
     ("ASOS",                "Other",         (20, 80),   2),
     ("Boots",               "Other",         (5, 35),    3),
+]
+
+# Subscriptions: fixed monthly price, charged on the same day each month.
+# (merchant, price, new_price, months_ago_price_changed)
+SUBSCRIPTIONS = [
+    ("Netflix",        15.99, 17.99, 4),   # one real price rise -> price alert
+    ("Spotify",        11.99, None,  None),
+    ("Amazon Prime",    8.99, None,  None),
+    ("Disney+",         4.99, None,  None),
+    ("Apple iCloud",    0.99, None,  None),
+    ("GitHub",          3.80, None,  None),
+    ("Gym Membership", 32.00, None,  None),
+]
+
+# A handful of believable one-off spikes: (months_ago, merchant, amount, description)
+ANOMALIES = [
+    (9, "Ocado",     264.30, "OCADO CHRISTMAS ORDER"),
+    (6, "Uber",       68.40, "UBER AIRPORT TRIP"),
+    (4, "Amazon",    489.99, "AMAZON MARKETPLACE"),
+    (2, "Trainline", 246.50, "TRAINLINE OPEN RETURN"),
+    (1, "Deliveroo", 118.75, "DELIVEROO GROUP ORDER"),
+]
+
+# Recent purchases the rules can't classify, left "pending" for "Categorise with AI"
+UNCATEGORISED = [
+    (2,  "Waterstones",   18.99),
+    (4,  "Pret A Manger",  7.45),
+    (6,  "IKEA",          86.00),
+    (8,  "Odeon Cinema",  24.50),
+    (10, "Ryanair",       59.99),
+    (12, "Wagamama",      31.20),
 ]
 
 # Monthly salary credit
@@ -107,8 +135,9 @@ def generate_transactions(account_id: int, cat_map: dict[str, int], now: datetim
     """12 months of rows ending at `now`. Nothing is dated after `now`."""
     rng = random.Random(42)  # reproducible
     rows: list[dict] = []
+    sub_days = {name: rng.randint(1, 5) for name, *_ in SUBSCRIPTIONS}
 
-    def add(merchant: str, description: str, category: str, amount: float, ts: datetime):
+    def add(merchant: str, description: str, category: str | None, amount: float, ts: datetime):
         if ts > now:
             return
         rows.append({
@@ -119,8 +148,8 @@ def generate_transactions(account_id: int, cat_map: dict[str, int], now: datetim
             "merchant_name": merchant,
             "description": description,
             "timestamp": ts,
-            "category_id": cat_map[category],
-            "categorisation_source": "rule",
+            "category_id": cat_map[category] if category else None,
+            "categorisation_source": "rule" if category else "pending",
             "is_anomaly": False,
         })
 
@@ -133,22 +162,25 @@ def generate_transactions(account_id: int, cat_map: dict[str, int], now: datetim
 
         # ── expenses ─────────────────────────────────────────────────────
         for merchant, category, amt_range, freq in EXPENSE_TEMPLATES:
-            if category == "Subscriptions":
-                # One charge per month on a consistent day
-                charge_day = datetime(year, month, rng.randint(1, 5), 10, 0)
-                amount = -round(rng.uniform(*amt_range) + rng.uniform(0, 0.99), 2)
-                add(merchant, merchant.upper(), category, amount, charge_day)
-            else:
-                # Jitter frequency slightly
-                for _ in range(max(1, freq + rng.randint(-1, 1))):
-                    amount = -round(rng.uniform(*amt_range), 2)
-                    add(merchant, merchant.upper(), category, amount, random_day_in_month(rng, year, month))
+            # Jitter frequency slightly
+            for _ in range(max(1, freq + rng.randint(-1, 1))):
+                amount = -round(rng.uniform(*amt_range), 2)
+                add(merchant, merchant.upper(), category, amount, random_day_in_month(rng, year, month))
 
-        # Inject 1-2 anomalous transactions per month: 4-6x the normal upper bound
-        for _ in range(rng.randint(1, 2)):
-            merchant, category, amt_range, _ = rng.choice(EXPENSE_TEMPLATES)
-            amount = -round(rng.uniform(amt_range[1] * 4, amt_range[1] * 6), 2)
-            add(merchant, f"{merchant.upper()} LARGE", category, amount, random_day_in_month(rng, year, month))
+        for merchant, price, new_price, changed_months_ago in SUBSCRIPTIONS:
+            if new_price is not None and month_offset < changed_months_ago:
+                price = new_price
+            charge_day = datetime(year, month, sub_days[merchant], 10, 0)
+            add(merchant, merchant.upper(), "Subscriptions", -price, charge_day)
+
+        for anomaly_months_ago, merchant, amount, description in ANOMALIES:
+            if anomaly_months_ago == month_offset:
+                category = next(c for m, c, *_ in EXPENSE_TEMPLATES if m == merchant)
+                add(merchant, description, category, -amount, random_day_in_month(rng, year, month))
+
+    for days_ago, merchant, amount in UNCATEGORISED:
+        ts = (now - timedelta(days=days_ago)).replace(hour=13, minute=0, second=0, microsecond=0)
+        add(merchant, merchant.upper(), None, -amount, ts)
 
     return rows
 
@@ -160,6 +192,11 @@ def _demo_account(db) -> Account | None:
     return db.query(Account).filter(Account.truelayer_account_id == f"demo-account-{user.id}").first()
 
 
+def _stored_seed_version(db) -> str | None:
+    meta = db.get(AppMeta, SEED_VERSION_KEY)
+    return meta.value if meta else None
+
+
 def _regenerate(db, account: Account) -> int:
     """Replace the demo account's transactions with a fresh 12 months ending now."""
     cat_map = {c.name: c.id for c in db.query(Category).all()}
@@ -168,26 +205,49 @@ def _regenerate(db, account: Account) -> int:
     rows = generate_transactions(account.id, cat_map, now)
     db.execute(insert(Transaction), rows)
     account.last_synced_at = now
+    db.merge(AppMeta(key=SEED_VERSION_KEY, value=str(SEED_VERSION)))
     db.commit()
+    # Flag anomalies up front so the demo's Anomalies page isn't empty
+    detect_anomalies(db, account.user_id)
     return len(rows)
 
 
-def refresh_demo_if_stale(db) -> bool:
-    """Cheap check (one MAX query) used on startup and on demo login."""
-    account = _demo_account(db)
-    if not account:
-        return False
+def demo_needs_reseed(db, account: Account) -> bool:
+    if _stored_seed_version(db) != str(SEED_VERSION):
+        return True
     latest = (
         db.query(func.max(Transaction.timestamp))
         .filter(Transaction.account_id == account.id)
         .scalar()
     )
     now = datetime.utcnow()
-    # Future-dated rows (from older seeds) also count as stale
-    if latest is not None and now - STALE_AFTER <= latest <= now:
+    # Missing, stale, or future-dated (older seeds) data all trigger a re-seed
+    return latest is None or not (now - STALE_AFTER <= latest <= now)
+
+
+def _reset_demo_uncategorised(db, account: Account):
+    """Put the demo's unknown merchants back to "pending" so every visitor can try
+    "Categorise with AI" (repeat runs are served from the merchant cache)."""
+    db.query(Transaction).filter(
+        Transaction.account_id == account.id,
+        Transaction.merchant_name.in_([m for _, m, _ in UNCATEGORISED]),
+    ).update({"category_id": None, "categorisation_source": "pending"}, synchronize_session=False)
+    db.commit()
+
+
+def refresh_demo_if_stale(db) -> bool:
+    """Cheap checks (one key lookup + one MAX query + one UPDATE) run on startup and on demo login."""
+    account = _demo_account(db)
+    if not account:
         return False
+    if not demo_needs_reseed(db, account):
+        _reset_demo_uncategorised(db, account)
+        return False
+    previous_version = _stored_seed_version(db)
     count = _regenerate(db, account)
-    logger.info("Regenerated %s demo transactions (previous latest: %s)", count, latest)
+    logger.info(
+        "Regenerated %s demo transactions (seed version %s -> %s)", count, previous_version, SEED_VERSION
+    )
     return True
 
 

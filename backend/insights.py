@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
+from statistics import median
 
 from models import Account, Category, Transaction
 
@@ -13,6 +14,35 @@ def _category_name(db, category_id) -> str:
         return "Other"
     cat = db.query(Category).filter(Category.id == category_id).first()
     return cat.name if cat else "Other"
+
+
+# Subscription detection: regular cadence + stable amount
+MIN_OCCURRENCES = 3
+AMOUNT_TOLERANCE = 0.20  # every charge within 20% of the merchant's median (allows a price rise)
+CADENCES = {
+    "monthly": (26, 35),  # days between charges
+    "weekly": (6, 8),
+}
+
+
+def subscription_frequency(timestamps: list[datetime], amounts: list[float]) -> str | None:
+    """Return "monthly"/"weekly" if the charges look like a subscription, else None.
+
+    Needs MIN_OCCURRENCES charges, every gap inside one cadence's window,
+    and every amount close to the median, so variable spend (fuel, groceries)
+    on an irregular schedule never qualifies.
+    """
+    if len(timestamps) < MIN_OCCURRENCES:
+        return None
+    med = median(amounts)
+    if med <= 0 or any(abs(a - med) / med > AMOUNT_TOLERANCE for a in amounts):
+        return None
+    ordered = sorted(timestamps)
+    gaps = [(b - a).days for a, b in zip(ordered, ordered[1:])]
+    for name, (low, high) in CADENCES.items():
+        if all(low <= g <= high for g in gaps):
+            return name
+    return None
 
 
 def detect_subscriptions(db, user_id: int) -> list:
@@ -40,33 +70,10 @@ def detect_subscriptions(db, user_id: int) -> list:
 
     results = []
     for merchant, txs in by_merchant.items():
-        if len(txs) < 2:
-            continue
-
         amounts = [abs(tx.amount) for tx in txs]
-        mean_amount = sum(amounts) / len(amounts)
-
-        # Check amounts are within 30% of each other
-        if not all(abs(a - mean_amount) / mean_amount <= 0.30 for a in amounts):
+        frequency = subscription_frequency([tx.timestamp for tx in txs], amounts)
+        if frequency is None:
             continue
-
-        # Calculate average gap to determine frequency label
-        gaps = []
-        for i in range(1, len(txs)):
-            delta = (txs[i].timestamp - txs[i - 1].timestamp).days
-            gaps.append(abs(delta))
-
-        if not gaps:
-            continue
-
-        avg_gap = sum(gaps) / len(gaps)
-
-        if 20 <= avg_gap <= 40:
-            frequency = "monthly"
-        elif 5 <= avg_gap <= 10:
-            frequency = "weekly"
-        else:
-            frequency = "irregular"
 
         most_recent = txs[-1]
         results.append({

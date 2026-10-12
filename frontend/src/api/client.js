@@ -1,7 +1,4 @@
 import axios from 'axios'
-import { createBrowserHistory } from 'history'
-
-const history = createBrowserHistory()
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
@@ -56,8 +53,14 @@ api.interceptors.response.use(
       clearTimeout(wakeTimer)
       setWaking(false)
     }
-    if (error.response?.status === 401) {
-      window.location.href = '/login'
+    // A failed login is a normal 401: let the login page show its error toast
+    const isLoginRequest = error.config?.url === '/auth/login'
+    if (error.response?.status === 401 && !isLoginRequest) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }

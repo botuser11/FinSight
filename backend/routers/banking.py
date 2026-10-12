@@ -292,8 +292,20 @@ async def banking_sync(current_user=Depends(forbid_demo), db: Session = Depends(
 
 @router.delete("/disconnect")
 async def banking_disconnect(current_user=Depends(forbid_demo), db: Session = Depends(get_db)):
-    accounts = db.query(Account).filter(Account.user_id == current_user.id).all()
-    for acct in accounts:
-        db.delete(acct)
+    # Transactions can't exist without an account (account_id is NOT NULL and
+    # they'd belong to no user), so delete them with their accounts in one commit.
+    account_ids = [a.id for a in db.query(Account.id).filter(Account.user_id == current_user.id).all()]
+    transactions_removed = 0
+    if account_ids:
+        transactions_removed = (
+            db.query(Transaction)
+            .filter(Transaction.account_id.in_(account_ids))
+            .delete(synchronize_session=False)
+        )
+        db.query(Account).filter(Account.id.in_(account_ids)).delete(synchronize_session=False)
     db.commit()
-    return {"disconnected": True}
+    return {
+        "disconnected": True,
+        "accounts_removed": len(account_ids),
+        "transactions_removed": transactions_removed,
+    }

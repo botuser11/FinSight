@@ -6,9 +6,16 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
-from categoriser import OPENROUTER_API_KEY, llm_category, rule_based_category
+from categoriser import (
+    LLM_BATCH_SIZE,
+    LLM_DAILY_CALL_LIMIT,
+    OPENROUTER_API_KEY,
+    llm_categorise_batch,
+    normalise_merchant,
+    rule_based_category,
+)
 from database import get_db
-from models import Account, Category, Transaction
+from models import Account, Category, LlmUsage, MerchantCategoryCache, Transaction
 
 router = APIRouter(prefix="/transactions")
 
@@ -145,6 +152,14 @@ def categorise_transactions(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Categorise pending transactions.
+
+    Rules first. With use_llm, merchants the rules can't place are looked up in
+    the merchant cache, then sent to the LLM in batches (capped per user per day).
+    Without use_llm, unmatched transactions become "Other". If the LLM is
+    unavailable, fails or hits the cap, unmatched transactions stay pending so
+    they can be retried.
+    """
     account_ids = _user_account_ids(current_user, db)
 
     pending = (
@@ -159,38 +174,83 @@ def categorise_transactions(
     category_map: dict[str, int] = {
         c.name: c.id for c in db.query(Category).all()
     }
+    counts = {"rule": 0, "llm": 0, "cache": 0, "other": 0}
 
-    counts = {"rule": 0, "llm": 0, "other": 0}
-    batch_size = 50
+    def assign(tx: Transaction, category_name: str, source: str):
+        if category_name not in category_map:
+            category_name, source = "Other", "other"
+        tx.category_id = category_map[category_name]
+        tx.categorisation_source = "llm" if source == "cache" else source
+        counts[source] += 1
 
-    for i in range(0, len(pending), batch_size):
-        batch = pending[i: i + batch_size]
-        for tx in batch:
-            merchant = tx.merchant_name or ""
-            desc = tx.description or ""
+    unmatched: list[Transaction] = []
+    for tx in pending:
+        category_name = rule_based_category(tx.merchant_name or "", tx.description or "")
+        if category_name:
+            assign(tx, category_name, "rule")
+        else:
+            unmatched.append(tx)
 
-            category_name = rule_based_category(merchant, desc)
-            source = "rule"
+    usage = None
+    llm_status = "not_needed"
+    if unmatched and not use_llm:
+        for tx in unmatched:
+            assign(tx, "Other", "other")
+        unmatched = []
+    elif unmatched:
+        by_merchant: dict[str, list[Transaction]] = {}
+        for tx in unmatched:
+            by_merchant.setdefault(normalise_merchant(tx.merchant_name or tx.description), []).append(tx)
 
-            if category_name is None:
-                if use_llm and OPENROUTER_API_KEY:
-                    category_name = llm_category(merchant, desc)
-                    source = "llm"
-                else:
-                    category_name = "Other"
-                    source = "other"
+        cached = {
+            row.merchant: row.category
+            for row in db.query(MerchantCategoryCache)
+            .filter(MerchantCategoryCache.merchant.in_(list(by_merchant)))
+            .all()
+        }
+        for merchant, category_name in cached.items():
+            for tx in by_merchant.pop(merchant):
+                assign(tx, category_name, "cache")
 
-            if category_name not in category_map:
-                category_name = "Other"
-                source = "other"
+        today = datetime.utcnow().date()
+        usage = db.get(LlmUsage, (current_user.id, today))
+        if usage is None:
+            usage = LlmUsage(user_id=current_user.id, day=today, calls=0)
+            db.add(usage)
 
-            tx.category_id = category_map[category_name]
-            tx.categorisation_source = source
-            counts[source] += 1
+        llm_status = "ok"
+        if by_merchant and not OPENROUTER_API_KEY:
+            llm_status = "disabled"
+        merchants = list(by_merchant)
+        for i in range(0, len(merchants) if OPENROUTER_API_KEY else 0, LLM_BATCH_SIZE):
+            if usage.calls >= LLM_DAILY_CALL_LIMIT:
+                llm_status = "limit_reached"
+                break
+            batch = merchants[i: i + LLM_BATCH_SIZE]
+            usage.calls += 1
+            answers = llm_categorise_batch(batch)
+            if answers is None:
+                llm_status = "failed"
+                break
+            for merchant, category_name in answers.items():
+                db.merge(MerchantCategoryCache(merchant=merchant, category=category_name))
+                for tx in by_merchant.pop(merchant):
+                    assign(tx, category_name, "llm")
 
-        db.commit()
+        unmatched = [tx for txs in by_merchant.values() for tx in txs]
 
-    return {"categorised": len(pending), "by_source": counts}
+    db.commit()
+
+    return {
+        "categorised": len(pending) - len(unmatched),
+        "pending": len(unmatched),
+        "by_source": counts,
+        "llm": {
+            "status": llm_status,
+            "calls_today": usage.calls if usage else None,
+            "daily_limit": LLM_DAILY_CALL_LIMIT,
+        },
+    }
 
 
 @router.get("/{tx_id}")
