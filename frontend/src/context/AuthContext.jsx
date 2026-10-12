@@ -1,17 +1,19 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useState } from 'react'
 import api from '../api/client'
 
 const AuthContext = createContext(null)
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null)
-
-  useEffect(() => {
-    const storedUser = localStorage.getItem('user')
-    if (storedUser) {
-      setUser(JSON.parse(storedUser))
+  // Read synchronously so ProtectedRoute sees the user on the first render
+  // (a hard refresh would otherwise bounce to /login)
+  const [user, setUser] = useState(() => {
+    try {
+      const storedUser = localStorage.getItem('user')
+      return storedUser && localStorage.getItem('token') ? JSON.parse(storedUser) : null
+    } catch {
+      return null
     }
-  }, [])
+  })
 
   const login = async (email, password) => {
     const response = await api.post('/auth/login', { email, password })
