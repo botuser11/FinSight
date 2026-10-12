@@ -1,5 +1,7 @@
 """
-Seed script — creates a demo user and 12 months of realistic transactions.
+Seed script — creates a demo user and 12 months of realistic transactions
+ending today. Runs on every backend startup and is idempotent; the demo
+user's data is wiped and regenerated when it goes stale.
 
 Usage:
     python seed_demo_data.py
@@ -9,19 +11,26 @@ Demo credentials:
     Password: demo1234
 """
 
+import calendar
+import logging
 import random
 import uuid
 from datetime import datetime, timedelta
 
-from database import Base, SessionLocal, engine
+from sqlalchemy import func, insert
+
+from config import DEMO_EMAIL, DEMO_PASSWORD
+from database import SessionLocal, ensure_schema
 from models import Account, Category, Transaction, User
 from auth import hash_password
 
+logger = logging.getLogger("finsight.seed")
+
 # ── configuration ────────────────────────────────────────────────────────────
 
-DEMO_EMAIL = "demo@finsight.app"
-DEMO_PASSWORD = "demo1234"
 MONTHS_OF_HISTORY = 12
+# Regenerate demo data once its latest transaction is older than this
+STALE_AFTER = timedelta(days=3)
 
 CATEGORIES = [
     ("Groceries",     "#1D9E75"),
@@ -77,17 +86,15 @@ INCOME_AMOUNT = (2400, 2800)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def random_day_in_month(year: int, month: int) -> datetime:
-    import calendar
+def random_day_in_month(rng: random.Random, year: int, month: int) -> datetime:
     last_day = calendar.monthrange(year, month)[1]
-    day = random.randint(1, last_day)
-    hour = random.randint(7, 22)
-    minute = random.randint(0, 59)
+    day = rng.randint(1, last_day)
+    hour = rng.randint(7, 22)
+    minute = rng.randint(0, 59)
     return datetime(year, month, day, hour, minute)
 
 
-def months_ago(n: int) -> tuple[int, int]:
-    now = datetime.utcnow()
+def months_ago(now: datetime, n: int) -> tuple[int, int]:
     month = now.month - n
     year = now.year
     while month <= 0:
@@ -96,165 +103,137 @@ def months_ago(n: int) -> tuple[int, int]:
     return year, month
 
 
+def generate_transactions(account_id: int, cat_map: dict[str, int], now: datetime) -> list[dict]:
+    """12 months of rows ending at `now`. Nothing is dated after `now`."""
+    rng = random.Random(42)  # reproducible
+    rows: list[dict] = []
+
+    def add(merchant: str, description: str, category: str, amount: float, ts: datetime):
+        if ts > now:
+            return
+        rows.append({
+            "account_id": account_id,
+            "truelayer_tx_id": str(uuid.uuid4()),
+            "amount": amount,
+            "currency": "GBP",
+            "merchant_name": merchant,
+            "description": description,
+            "timestamp": ts,
+            "category_id": cat_map[category],
+            "categorisation_source": "rule",
+            "is_anomaly": False,
+        })
+
+    for month_offset in range(MONTHS_OF_HISTORY - 1, -1, -1):
+        year, month = months_ago(now, month_offset)
+
+        # ── salary credit: the 1st, so the current month always has income ──
+        salary_day = min(datetime(year, month, 1, 9, 0), now)
+        add("Employer Payroll", "BACS SALARY", "Income", round(rng.uniform(*INCOME_AMOUNT), 2), salary_day)
+
+        # ── expenses ─────────────────────────────────────────────────────
+        for merchant, category, amt_range, freq in EXPENSE_TEMPLATES:
+            if category == "Subscriptions":
+                # One charge per month on a consistent day
+                charge_day = datetime(year, month, rng.randint(1, 5), 10, 0)
+                amount = -round(rng.uniform(*amt_range) + rng.uniform(0, 0.99), 2)
+                add(merchant, merchant.upper(), category, amount, charge_day)
+            else:
+                # Jitter frequency slightly
+                for _ in range(max(1, freq + rng.randint(-1, 1))):
+                    amount = -round(rng.uniform(*amt_range), 2)
+                    add(merchant, merchant.upper(), category, amount, random_day_in_month(rng, year, month))
+
+        # Inject 1-2 anomalous transactions per month: 4-6x the normal upper bound
+        for _ in range(rng.randint(1, 2)):
+            merchant, category, amt_range, _ = rng.choice(EXPENSE_TEMPLATES)
+            amount = -round(rng.uniform(amt_range[1] * 4, amt_range[1] * 6), 2)
+            add(merchant, f"{merchant.upper()} LARGE", category, amount, random_day_in_month(rng, year, month))
+
+    return rows
+
+
+def _demo_account(db) -> Account | None:
+    user = db.query(User).filter(User.email == DEMO_EMAIL).first()
+    if not user:
+        return None
+    return db.query(Account).filter(Account.truelayer_account_id == f"demo-account-{user.id}").first()
+
+
+def _regenerate(db, account: Account) -> int:
+    """Replace the demo account's transactions with a fresh 12 months ending now."""
+    cat_map = {c.name: c.id for c in db.query(Category).all()}
+    now = datetime.utcnow()
+    db.query(Transaction).filter(Transaction.account_id == account.id).delete(synchronize_session=False)
+    rows = generate_transactions(account.id, cat_map, now)
+    db.execute(insert(Transaction), rows)
+    account.last_synced_at = now
+    db.commit()
+    return len(rows)
+
+
+def refresh_demo_if_stale(db) -> bool:
+    """Cheap check (one MAX query) used on startup and on demo login."""
+    account = _demo_account(db)
+    if not account:
+        return False
+    latest = (
+        db.query(func.max(Transaction.timestamp))
+        .filter(Transaction.account_id == account.id)
+        .scalar()
+    )
+    now = datetime.utcnow()
+    # Future-dated rows (from older seeds) also count as stale
+    if latest is not None and now - STALE_AFTER <= latest <= now:
+        return False
+    count = _regenerate(db, account)
+    logger.info("Regenerated %s demo transactions (previous latest: %s)", count, latest)
+    return True
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def seed():
-    Base.metadata.create_all(bind=engine)
+    ensure_schema()
     db = SessionLocal()
 
     try:
         # ── categories ──────────────────────────────────────────────────────
-        cat_map: dict[str, int] = {}
         for name, color in CATEGORIES:
-            existing = db.query(Category).filter(Category.name == name).first()
-            if existing:
-                cat_map[name] = existing.id
-            else:
-                cat = Category(name=name, color_hex=color, is_default=True)
-                db.add(cat)
-                db.flush()
-                cat_map[name] = cat.id
+            if not db.query(Category).filter(Category.name == name).first():
+                db.add(Category(name=name, color_hex=color, is_default=True))
         db.commit()
-        print(f"  OK{len(cat_map)} categories ready")
 
         # ── user ────────────────────────────────────────────────────────────
         user = db.query(User).filter(User.email == DEMO_EMAIL).first()
         if not user:
             user = User(email=DEMO_EMAIL, password_hash=hash_password(DEMO_PASSWORD))
             db.add(user)
-            db.flush()
             db.commit()
-            print(f"  OKCreated user {DEMO_EMAIL}")
-        else:
-            print(f"  OKUser {DEMO_EMAIL} already exists (id={user.id})")
+            logger.info("Created demo user %s", DEMO_EMAIL)
 
         # ── account ─────────────────────────────────────────────────────────
         acct_tl_id = f"demo-account-{user.id}"
-        account = db.query(Account).filter(Account.truelayer_account_id == acct_tl_id).first()
-        if not account:
-            account = Account(
+        if not db.query(Account).filter(Account.truelayer_account_id == acct_tl_id).first():
+            db.add(Account(
                 user_id=user.id,
                 truelayer_account_id=acct_tl_id,
                 display_name="Demo Current Account",
                 currency="GBP",
                 account_type="TRANSACTION",
                 last_synced_at=datetime.utcnow(),
-            )
-            db.add(account)
-            db.flush()
+            ))
             db.commit()
-            print(f"  OKCreated account (id={account.id})")
-        else:
-            print(f"  OKAccount already exists (id={account.id})")
+            logger.info("Created demo account")
 
         # ── transactions ────────────────────────────────────────────────────
-        existing_tx_count = (
-            db.query(Transaction)
-            .filter(Transaction.account_id == account.id)
-            .count()
-        )
-        if existing_tx_count > 0:
-            print(f"  OK{existing_tx_count} transactions already exist — skipping generation")
-            return
-
-        tx_count = 0
-        random.seed(42)  # reproducible
-        now = datetime.utcnow()
-
-        def add(tx: Transaction):
-            # Never create future-dated transactions
-            nonlocal tx_count
-            if tx.timestamp <= now:
-                db.add(tx)
-                tx_count += 1
-
-        for month_offset in range(MONTHS_OF_HISTORY - 1, -1, -1):
-            year, month = months_ago(month_offset)
-
-            # ── salary credit ────────────────────────────────────────────
-            salary_day = datetime(year, month, random.randint(25, 28), 9, 0)
-            salary_amount = round(random.uniform(*INCOME_AMOUNT), 2)
-            add(Transaction(
-                account_id=account.id,
-                truelayer_tx_id=str(uuid.uuid4()),
-                amount=salary_amount,
-                currency="GBP",
-                merchant_name="Employer Payroll",
-                description="BACS SALARY",
-                timestamp=salary_day,
-                category_id=cat_map["Income"],
-                categorisation_source="rule",
-                is_anomaly=False,
-            ))
-
-            # ── expenses ─────────────────────────────────────────────────
-            for merchant, category, amt_range, freq in EXPENSE_TEMPLATES:
-                # Subscriptions: one charge per month on a consistent day
-                if category == "Subscriptions":
-                    charge_day = datetime(year, month, random.randint(1, 5), 10, 0)
-                    amount = -round(random.uniform(*amt_range) + random.uniform(0, 0.99), 2)
-                    add(Transaction(
-                        account_id=account.id,
-                        truelayer_tx_id=str(uuid.uuid4()),
-                        amount=amount,
-                        currency="GBP",
-                        merchant_name=merchant,
-                        description=merchant.upper(),
-                        timestamp=charge_day,
-                        category_id=cat_map[category],
-                        categorisation_source="rule",
-                        is_anomaly=False,
-                    ))
-                else:
-                    # Jitter frequency slightly
-                    actual_freq = max(1, freq + random.randint(-1, 1))
-                    for _ in range(actual_freq):
-                        ts = random_day_in_month(year, month)
-                        amount = -round(random.uniform(*amt_range), 2)
-                        add(Transaction(
-                            account_id=account.id,
-                            truelayer_tx_id=str(uuid.uuid4()),
-                            amount=amount,
-                            currency="GBP",
-                            merchant_name=merchant,
-                            description=merchant.upper(),
-                            timestamp=ts,
-                            category_id=cat_map[category],
-                            categorisation_source="rule",
-                            is_anomaly=False,
-                        ))
-
-            # Inject 1-2 anomalous transactions per month
-            for _ in range(random.randint(1, 2)):
-                anomaly_merchant, anomaly_cat, anomaly_range, _ = random.choice(EXPENSE_TEMPLATES)
-                ts = random_day_in_month(year, month)
-                # 4-6x the normal upper bound
-                amount = -round(random.uniform(anomaly_range[1] * 4, anomaly_range[1] * 6), 2)
-                add(Transaction(
-                    account_id=account.id,
-                    truelayer_tx_id=str(uuid.uuid4()),
-                    amount=amount,
-                    currency="GBP",
-                    merchant_name=anomaly_merchant,
-                    description=f"{anomaly_merchant.upper()} LARGE",
-                    timestamp=ts,
-                    category_id=cat_map[anomaly_cat],
-                    categorisation_source="rule",
-                    is_anomaly=False,
-                ))
-
-        db.commit()
-        print(f"  OKCreated {tx_count} transactions across {MONTHS_OF_HISTORY} months")
-        print()
-        print("  Demo credentials:")
-        print(f"    Email:    {DEMO_EMAIL}")
-        print(f"    Password: {DEMO_PASSWORD}")
+        if not refresh_demo_if_stale(db):
+            logger.info("Demo data is fresh; nothing to seed")
 
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    print("Seeding demo data…")
     seed()
-    print("Done.")
+    print(f"Done. Demo credentials: {DEMO_EMAIL} / {DEMO_PASSWORD}")

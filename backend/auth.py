@@ -7,14 +7,8 @@ import models
 from database import get_db
 from sqlalchemy.orm import Session
 from schemas import TokenData
-from dotenv import load_dotenv
-from pathlib import Path
-import os
+from config import ALGORITHM, DEMO_EMAIL, SECRET_KEY
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / '.env')
-
-SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')
-ALGORITHM = os.getenv('ALGORITHM', 'HS256')
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -56,3 +50,17 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
     return user
+
+
+def is_demo_user(user) -> bool:
+    return user.email == DEMO_EMAIL
+
+
+def forbid_demo(current_user: models.User = Depends(get_current_user)):
+    """Use instead of get_current_user on endpoints that could break the shared demo account."""
+    if is_demo_user(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action is disabled for the demo account",
+        )
+    return current_user

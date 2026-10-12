@@ -22,7 +22,8 @@ class Account(Base):
     display_name = Column(String, nullable=True)
     currency = Column(String, default='GBP', nullable=False)
     account_type = Column(String, nullable=True)
-    access_token = Column(String, nullable=True)
+    access_token = Column(String, nullable=True)  # Fernet-encrypted
+    refresh_token = Column(String, nullable=True)  # Fernet-encrypted
     token_expires_at = Column(DateTime, nullable=True)
     last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
