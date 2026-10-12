@@ -8,9 +8,14 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent / '.env')
 
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///./finsight.db')
 
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False} if IS_SQLITE else {},
+    # Neon suspends idle compute and drops connections; test each pooled
+    # connection before use and recycle before the server-side idle timeout.
+    **({} if IS_SQLITE else {"pool_pre_ping": True, "pool_recycle": 300}),
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
