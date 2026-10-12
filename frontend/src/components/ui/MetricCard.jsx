@@ -5,7 +5,7 @@ const ACCENT_COLORS = {
   amber:  { border: '#BA7517', bg: '#FAEEDA', text: '#BA7517' },
 }
 
-export default function MetricCard({ title, value, subtitle, icon: Icon, color = 'indigo', loading }) {
+export default function MetricCard({ title, value, subtitle, icon: Icon, color = 'indigo', loading, valueClassName = 'text-slate-900 dark:text-slate-50' }) {
   const accent = ACCENT_COLORS[color]
 
   return (
@@ -21,7 +21,7 @@ export default function MetricCard({ title, value, subtitle, icon: Icon, color =
           {loading ? (
             <div className="mt-2 h-7 w-24 rounded bg-slate-100 dark:bg-slate-800 animate-pulse" />
           ) : (
-            <p className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-50 truncate">
+            <p className={`mt-1 text-2xl font-semibold truncate ${valueClassName}`}>
               {value}
             </p>
           )}

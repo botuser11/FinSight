@@ -82,18 +82,10 @@ python seed_demo_data.py
 ## Environment Variables
 
 ### Backend (.env)
-```
-DATABASE_URL=sqlite:///./finsight.db
-SECRET_KEY=your-secret-key
-ALGORITHM=HS256
-TRUELAYER_CLIENT_ID=your-truelayer-client-id
-TRUELAYER_CLIENT_SECRET=your-truelayer-client-secret
-TRUELAYER_REDIRECT_URI=http://localhost:8000/banking/callback
-TRUELAYER_AUTH_URL=https://auth.truelayer-sandbox.com
-TRUELAYER_API_URL=https://api.truelayer-sandbox.com
-OPENROUTER_API_KEY=your-openrouter-key
-FRONTEND_URL=http://localhost:5173
-```
+See `backend/.env.example` for every variable with comments. In production
+(`ENVIRONMENT=production`, or automatically on Render) the API refuses to start
+without `SECRET_KEY` and `FRONTEND_URL`. Bank connect needs `TOKEN_ENCRYPTION_KEY`
+(a Fernet key) to store tokens encrypted.
 
 ### Frontend (.env)
 ```

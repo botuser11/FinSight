@@ -26,6 +26,8 @@ import { getAccounts, getConnectUrl, syncTransactions } from '../api/banking'
 import { categoriseAll } from '../api/transactions'
 import { runDetection } from '../api/anomalies'
 import useDashboard from '../hooks/useDashboard'
+import { useAuth } from '../context/AuthContext'
+import { DEMO_EMAIL } from '../demo'
 import MetricCard from '../components/ui/MetricCard'
 import TransactionRow from '../components/ui/TransactionRow'
 import LoadingSpinner from '../components/ui/LoadingSpinner'
@@ -71,6 +73,8 @@ export default function Dashboard() {
   const year = parseInt(searchParams.get('year') || now.getFullYear())
 
   const { accounts, summary, dailyData, recent, metrics, loading, error } = useDashboard(month, year)
+  const { user } = useAuth()
+  const isDemo = user?.email === DEMO_EMAIL
 
   const [syncing, setSyncing] = useState(false)
   const [categorising, setCategorising] = useState(false)
@@ -146,10 +150,10 @@ export default function Dashboard() {
     }
   }
 
-  // Pie chart data — only expenses from summary
-  const pieData = summary
-    .filter(s => s.total < 0)
-    .map(s => ({ name: s.category, value: Math.abs(s.total), fill: CATEGORY_COLORS[s.category] || '#888780' }))
+  // Pie chart data — spend by category (positive totals)
+  const pieData = (summary?.by_category || [])
+    .filter(s => s.total > 0)
+    .map(s => ({ name: s.category, value: s.total, fill: CATEGORY_COLORS[s.category] || '#888780' }))
   const pieTotal = pieData.reduce((s, d) => s + d.value, 0)
 
   const pendingCount = recent.filter(t => t.categorisation_source === 'pending').length
@@ -218,14 +222,16 @@ export default function Dashboard() {
             <AlertTriangle className={`h-3.5 w-3.5 ${detecting ? 'animate-pulse' : ''}`} />
             Run detection
           </button>
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className="flex items-center gap-1.5 rounded-lg bg-[#534AB7] hover:bg-[#3C3489] text-white text-xs font-medium px-3 py-1.5 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-            Sync
-          </button>
+          {!isDemo && (
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="flex items-center gap-1.5 rounded-lg bg-[#534AB7] hover:bg-[#3C3489] text-white text-xs font-medium px-3 py-1.5 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+              Sync
+            </button>
+          )}
         </div>
       </div>
 
@@ -247,10 +253,11 @@ export default function Dashboard() {
         />
         <MetricCard
           title="Saved"
-          value={fmt(metrics.saved)}
-          subtitle={metrics.saved >= 0 ? 'Positive balance' : 'Overspent'}
+          value={`${metrics.net < 0 ? '−' : ''}${fmt(metrics.net)}`}
+          subtitle={metrics.net >= 0 ? 'Income minus spending' : 'Overspent this month'}
           icon={PiggyBank}
-          color={metrics.saved >= 0 ? 'indigo' : 'coral'}
+          color={metrics.net >= 0 ? 'teal' : 'coral'}
+          valueClassName={metrics.net >= 0 ? 'text-[#1D9E75]' : 'text-[#D85A30]'}
         />
         <MetricCard
           title="Anomalies"

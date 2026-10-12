@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
-
-const DEMO_EMAIL = 'demo@finsight.app'
-const DEMO_PASSWORD = 'demo1234'
+import { DEMO_EMAIL, DEMO_PASSWORD } from '../demo'
 
 export default function Login() {
   const { login } = useAuth()
@@ -20,8 +18,12 @@ export default function Login() {
     try {
       await login(email, password)
       navigate('/dashboard')
-    } catch {
-      toast.error('Invalid email or password.')
+    } catch (err) {
+      toast.error(
+        err.response?.status === 429
+          ? 'Too many attempts. Please wait a minute and try again.'
+          : 'Invalid email or password.'
+      )
     } finally {
       setLoading(false)
     }
@@ -32,8 +34,12 @@ export default function Login() {
     try {
       await login(DEMO_EMAIL, DEMO_PASSWORD)
       navigate('/dashboard')
-    } catch {
-      toast.error('Could not sign in to the demo. Please try again.')
+    } catch (err) {
+      toast.error(
+        err.response?.status === 429
+          ? 'Too many attempts. Please wait a minute and try again.'
+          : 'Could not sign in to the demo. Please try again.'
+      )
     } finally {
       setDemoLoading(false)
     }

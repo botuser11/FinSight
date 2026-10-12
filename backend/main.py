@@ -1,14 +1,15 @@
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from database import engine, Base, SessionLocal
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
+from config import FRONTEND_URL, IS_PRODUCTION
+from limiter import limiter
 from routers import auth as auth_router
 from routers import banking as banking_router
 from seed_demo_data import seed
-
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,14 +19,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title='FinSight API', lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+allowed_origins = [FRONTEND_URL]
+if not IS_PRODUCTION:
+    allowed_origins += ["http://localhost:5173", "http://localhost:3000"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        FRONTEND_URL,
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],

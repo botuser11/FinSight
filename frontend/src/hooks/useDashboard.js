@@ -4,7 +4,7 @@ import { getSummary, getTransactions } from '../api/transactions'
 
 export default function useDashboard(month, year) {
   const [accounts, setAccounts] = useState([])
-  const [summary, setSummary] = useState([])
+  const [summary, setSummary] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -37,12 +37,13 @@ export default function useDashboard(month, year) {
     return () => { cancelled = true }
   }, [month, year])
 
+  // Totals come from the server summary: spend/income positive, net signed
   const metrics = {
-    totalSpent: transactions.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0),
-    totalIncome: transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0),
+    totalSpent: summary?.spend ?? 0,
+    totalIncome: summary?.income ?? 0,
+    net: summary?.net ?? 0,
     anomalyCount: transactions.filter(t => t.is_anomaly).length,
   }
-  metrics.saved = metrics.totalIncome + metrics.totalSpent
 
   const dailyData = (() => {
     const daysInMonth = new Date(year, month, 0).getDate()

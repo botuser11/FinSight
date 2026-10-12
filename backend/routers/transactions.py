@@ -14,7 +14,7 @@ router = APIRouter(prefix="/transactions")
 
 
 @router.get("/categories")
-def get_categories(db: Session = Depends(get_db)):
+def get_categories(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     cats = db.query(Category).all()
     return [{"id": c.id, "name": c.name, "color_hex": c.color_hex} for c in cats]
 
@@ -105,22 +105,38 @@ def get_summary(
         db.query(Transaction)
         .filter(
             Transaction.account_id.in_(account_ids),
-            Transaction.amount < 0,
             Transaction.timestamp >= datetime(year, month, 1),
             Transaction.timestamp < end,
         )
         .all()
     )
 
-    totals: dict[str, dict] = {}
+    # All totals are positive amounts; net is signed (negative = overspent).
+    income = 0.0
+    spend = 0.0
+    by_category: dict[str, dict] = {}
     for tx in txs:
+        if tx.amount > 0:
+            income += tx.amount
+            continue
+        spend += -tx.amount
         name = tx.category.name if tx.category else "Other"
-        if name not in totals:
-            totals[name] = {"category": name, "total": 0.0, "count": 0}
-        totals[name]["total"] = round(totals[name]["total"] + tx.amount, 2)
-        totals[name]["count"] += 1
+        if name not in by_category:
+            by_category[name] = {"category": name, "total": 0.0, "count": 0}
+        by_category[name]["total"] += -tx.amount
+        by_category[name]["count"] += 1
 
-    return list(totals.values())
+    for entry in by_category.values():
+        entry["total"] = round(entry["total"], 2)
+
+    return {
+        "month": month,
+        "year": year,
+        "income": round(income, 2),
+        "spend": round(spend, 2),
+        "net": round(income - spend, 2),
+        "by_category": sorted(by_category.values(), key=lambda e: e["total"], reverse=True),
+    }
 
 
 @router.post("/categorise")
