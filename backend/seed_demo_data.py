@@ -225,10 +225,23 @@ def demo_needs_reseed(db, account: Account) -> bool:
     return latest is None or not (now - STALE_AFTER <= latest <= now)
 
 
+def _reset_demo_uncategorised(db, account: Account):
+    """Put the demo's unknown merchants back to "pending" so every visitor can try
+    "Categorise with AI" (repeat runs are served from the merchant cache)."""
+    db.query(Transaction).filter(
+        Transaction.account_id == account.id,
+        Transaction.merchant_name.in_([m for _, m, _ in UNCATEGORISED]),
+    ).update({"category_id": None, "categorisation_source": "pending"}, synchronize_session=False)
+    db.commit()
+
+
 def refresh_demo_if_stale(db) -> bool:
-    """Cheap check (one key lookup + one MAX query) used on startup and on demo login."""
+    """Cheap checks (one key lookup + one MAX query + one UPDATE) run on startup and on demo login."""
     account = _demo_account(db)
-    if not account or not demo_needs_reseed(db, account):
+    if not account:
+        return False
+    if not demo_needs_reseed(db, account):
+        _reset_demo_uncategorised(db, account)
         return False
     previous_version = _stored_seed_version(db)
     count = _regenerate(db, account)

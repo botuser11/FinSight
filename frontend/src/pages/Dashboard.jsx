@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   PiggyBank,
   RefreshCw,
+  Sparkles,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -23,7 +24,7 @@ import {
   YAxis,
 } from 'recharts'
 import { getAccounts, getConnectUrl, syncTransactions } from '../api/banking'
-import { categoriseAll } from '../api/transactions'
+import { categoriseWithAI } from '../api/transactions'
 import { runDetection } from '../api/anomalies'
 import useDashboard from '../hooks/useDashboard'
 import { useAuth } from '../context/AuthContext'
@@ -72,7 +73,7 @@ export default function Dashboard() {
   const month = parseInt(searchParams.get('month') || now.getMonth() + 1)
   const year = parseInt(searchParams.get('year') || now.getFullYear())
 
-  const { accounts, summary, dailyData, recent, metrics, loading, error } = useDashboard(month, year)
+  const { accounts, summary, transactions, dailyData, recent, metrics, loading, error } = useDashboard(month, year)
   const { user } = useAuth()
   const isDemo = user?.email === DEMO_EMAIL
 
@@ -117,11 +118,22 @@ export default function Dashboard() {
 
   const handleCategorise = async () => {
     setCategorising(true)
-    const tid = toast.loading('Categorising transactions…')
+    const tid = toast.loading('Categorising with AI…')
     try {
-      const res = await categoriseAll()
-      toast.success(`Categorised ${res.data.categorised} transactions.`, { id: tid })
-      window.location.reload()
+      const res = await categoriseWithAI()
+      const { categorised, pending, llm } = res.data
+      const notes = {
+        disabled: 'AI is not configured, so only rules were applied.',
+        limit_reached: "Today's AI limit is reached; the rest will be retried tomorrow.",
+        failed: 'The AI service is unavailable right now; the rest are still pending.',
+      }
+      const message = `Categorised ${categorised} transaction${categorised === 1 ? '' : 's'}.`
+      if (pending > 0 && notes[llm.status]) {
+        toast(`${message} ${notes[llm.status]}`, { id: tid, icon: 'ℹ️' })
+      } else {
+        toast.success(message, { id: tid })
+      }
+      if (categorised > 0) setTimeout(() => window.location.reload(), 1200)
     } catch {
       toast.error('Categorisation failed.', { id: tid })
     } finally {
@@ -156,7 +168,7 @@ export default function Dashboard() {
     .map(s => ({ name: s.category, value: s.total, fill: CATEGORY_COLORS[s.category] || '#888780' }))
   const pieTotal = pieData.reduce((s, d) => s + d.value, 0)
 
-  const pendingCount = recent.filter(t => t.categorisation_source === 'pending').length
+  const pendingCount = transactions.filter(t => t.categorisation_source === 'pending').length
 
   if (loading) {
     return <LoadingSpinner size="lg" className="h-[60vh]" />
@@ -211,7 +223,8 @@ export default function Dashboard() {
               disabled={categorising}
               className="flex items-center gap-1.5 rounded-lg border border-[#534AB7] text-[#534AB7] text-xs font-medium px-3 py-1.5 hover:bg-[#EEEDFE] dark:hover:bg-[#534AB7]/10 transition-colors disabled:opacity-50"
             >
-              <span>Categorise ({pendingCount})</span>
+              <Sparkles className={`h-3.5 w-3.5 ${categorising ? 'animate-pulse' : ''}`} />
+              <span>Categorise with AI ({pendingCount})</span>
             </button>
           )}
           <button

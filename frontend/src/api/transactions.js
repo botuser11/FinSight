@@ -5,4 +5,5 @@ export const getSummary = (month, year) => client.get('/transactions/summary', {
 export const getTransaction = (id) => client.get(`/transactions/${id}`)
 export const updateCategory = (id, category_id) => client.patch(`/transactions/${id}`, { category_id })
 export const categoriseAll = () => client.post('/transactions/categorise?use_llm=false')
+export const categoriseWithAI = () => client.post('/transactions/categorise?use_llm=true')
 export const getCategories = () => client.get('/transactions/categories')
