@@ -162,7 +162,7 @@ export default function Anomalies() {
 
             <div className="px-5 py-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-[#111111]">
               <p className="text-xs text-slate-400 dark:text-slate-500">
-                {anomalies.length} anomal{anomalies.length === 1 ? 'y' : 'ies'} — transactions more than 2 standard deviations above category average
+                {anomalies.length} anomal{anomalies.length === 1 ? 'y' : 'ies'} — transactions far above what you usually spend at that merchant (needs 6+ past purchases)
               </p>
             </div>
           </>
