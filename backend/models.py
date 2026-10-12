@@ -60,3 +60,11 @@ class Transaction(Base):
 
     account = relationship('Account', back_populates='transactions')
     category = relationship('Category', back_populates='transactions')
+
+
+class AppMeta(Base):
+    """Small key/value store for app state (e.g. the demo seed version)."""
+    __tablename__ = 'app_meta'
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
