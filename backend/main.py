@@ -1,15 +1,23 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, SessionLocal
 from routers import auth as auth_router
 from routers import banking as banking_router
-import models
+from seed_demo_data import seed
 
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-app = FastAPI(title='FinSight API')
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Creates tables, default categories and the demo user + data (idempotent)
+    seed()
+    yield
+
+
+app = FastAPI(title='FinSight API', lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,29 +30,6 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
-
-@app.on_event('startup')
-def startup_event():
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    try:
-        existing = db.query(models.Category).count()
-        if existing == 0:
-            defaults = [
-                ('Groceries', '#1D9E75'),
-                ('Transport', '#534AB7'),
-                ('Dining', '#BA7517'),
-                ('Subscriptions', '#D85A30'),
-                ('Utilities', '#378ADD'),
-                ('Income', '#1D9E75'),
-                ('Other', '#888780'),
-            ]
-            for name, color in defaults:
-                category = models.Category(name=name, color_hex=color, is_default=True)
-                db.add(category)
-            db.commit()
-    finally:
-        db.close()
 
 from routers import transactions as transactions_router
 from routers import anomalies as anomalies_router
@@ -60,3 +45,8 @@ app.include_router(insights_router.router, tags=["insights"])
 @app.get('/')
 def root():
     return {'status': 'FinSight API is running'}
+
+
+@app.get('/health')
+def health():
+    return {'status': 'ok'}

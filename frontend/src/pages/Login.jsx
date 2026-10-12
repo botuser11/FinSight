@@ -3,12 +3,16 @@ import { Link, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 
+const DEMO_EMAIL = 'demo@finsight.app'
+const DEMO_PASSWORD = 'demo1234'
+
 export default function Login() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [demoLoading, setDemoLoading] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -20,6 +24,18 @@ export default function Login() {
       toast.error('Invalid email or password.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleDemo = async () => {
+    setDemoLoading(true)
+    try {
+      await login(DEMO_EMAIL, DEMO_PASSWORD)
+      navigate('/dashboard')
+    } catch {
+      toast.error('Could not sign in to the demo. Please try again.')
+    } finally {
+      setDemoLoading(false)
     }
   }
 
@@ -44,6 +60,24 @@ export default function Login() {
             <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-50">Sign in</h1>
           </div>
           <p className="text-sm text-slate-400 dark:text-slate-500 mb-6">Your finances, understood.</p>
+
+          <button
+            type="button"
+            onClick={handleDemo}
+            disabled={demoLoading || loading}
+            className="w-full rounded-lg bg-[#1D9E75] hover:bg-[#17805f] text-white text-sm font-semibold py-2.5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {demoLoading ? 'Opening demo…' : 'Try the demo'}
+          </button>
+          <p className="mt-2 text-center text-xs text-slate-400 dark:text-slate-500">
+            One click, no sign-up. Uses 12 months of sample data.
+          </p>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="h-px flex-1 bg-slate-100 dark:bg-slate-800" />
+            <span className="text-xs text-slate-400 dark:text-slate-500">or sign in</span>
+            <div className="h-px flex-1 bg-slate-100 dark:bg-slate-800" />
+          </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -76,7 +110,7 @@ export default function Login() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || demoLoading}
               className="mt-2 w-full rounded-lg bg-[#534AB7] hover:bg-[#3C3489] text-white text-sm font-semibold py-2.5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {loading ? 'Signing in…' : 'Sign in'}

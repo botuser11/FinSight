@@ -159,6 +159,14 @@ def seed():
 
         tx_count = 0
         random.seed(42)  # reproducible
+        now = datetime.utcnow()
+
+        def add(tx: Transaction):
+            # Never create future-dated transactions
+            nonlocal tx_count
+            if tx.timestamp <= now:
+                db.add(tx)
+                tx_count += 1
 
         for month_offset in range(MONTHS_OF_HISTORY - 1, -1, -1):
             year, month = months_ago(month_offset)
@@ -166,7 +174,7 @@ def seed():
             # ── salary credit ────────────────────────────────────────────
             salary_day = datetime(year, month, random.randint(25, 28), 9, 0)
             salary_amount = round(random.uniform(*INCOME_AMOUNT), 2)
-            db.add(Transaction(
+            add(Transaction(
                 account_id=account.id,
                 truelayer_tx_id=str(uuid.uuid4()),
                 amount=salary_amount,
@@ -178,7 +186,6 @@ def seed():
                 categorisation_source="rule",
                 is_anomaly=False,
             ))
-            tx_count += 1
 
             # ── expenses ─────────────────────────────────────────────────
             for merchant, category, amt_range, freq in EXPENSE_TEMPLATES:
@@ -186,7 +193,7 @@ def seed():
                 if category == "Subscriptions":
                     charge_day = datetime(year, month, random.randint(1, 5), 10, 0)
                     amount = -round(random.uniform(*amt_range) + random.uniform(0, 0.99), 2)
-                    db.add(Transaction(
+                    add(Transaction(
                         account_id=account.id,
                         truelayer_tx_id=str(uuid.uuid4()),
                         amount=amount,
@@ -198,14 +205,13 @@ def seed():
                         categorisation_source="rule",
                         is_anomaly=False,
                     ))
-                    tx_count += 1
                 else:
                     # Jitter frequency slightly
                     actual_freq = max(1, freq + random.randint(-1, 1))
                     for _ in range(actual_freq):
                         ts = random_day_in_month(year, month)
                         amount = -round(random.uniform(*amt_range), 2)
-                        db.add(Transaction(
+                        add(Transaction(
                             account_id=account.id,
                             truelayer_tx_id=str(uuid.uuid4()),
                             amount=amount,
@@ -217,7 +223,6 @@ def seed():
                             categorisation_source="rule",
                             is_anomaly=False,
                         ))
-                        tx_count += 1
 
             # Inject 1-2 anomalous transactions per month
             for _ in range(random.randint(1, 2)):
@@ -225,7 +230,7 @@ def seed():
                 ts = random_day_in_month(year, month)
                 # 4-6x the normal upper bound
                 amount = -round(random.uniform(anomaly_range[1] * 4, anomaly_range[1] * 6), 2)
-                db.add(Transaction(
+                add(Transaction(
                     account_id=account.id,
                     truelayer_tx_id=str(uuid.uuid4()),
                     amount=amount,
@@ -237,7 +242,6 @@ def seed():
                     categorisation_source="rule",
                     is_anomaly=False,
                 ))
-                tx_count += 1
 
         db.commit()
         print(f"  OKCreated {tx_count} transactions across {MONTHS_OF_HISTORY} months")
